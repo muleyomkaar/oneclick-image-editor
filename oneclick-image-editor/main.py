@@ -102,10 +102,6 @@ def resize_cover(
     crop_x: float = 0.5,
     crop_y: float = 0.5,
     crop_zoom: float = 1.0,
-    brightness: float = 1.0,
-    contrast: float = 1.0,
-    saturation: float = 1.0,
-    sharpness: float = 1.0,
 ) -> Image.Image:
     target_width, target_height = size
     crop_x = max(0.0, min(crop_x, 1.0))
@@ -139,28 +135,6 @@ def apply_action(
         image = ImageEnhance.Color(image).enhance(1.08)
         image = ImageEnhance.Sharpness(image).enhance(1.22)
         return image
-
-    if action == "smart_edit":
-        rgb = image.convert("RGB")
-        sample = ImageOps.grayscale(rgb).resize((64, 64))
-        low, high = sample.getextrema()
-        mean = sum(sample.getdata()) / 4096
-        if high - low < 190:
-            rgb = ImageOps.autocontrast(rgb, cutoff=0.5)
-        if mean < 105:
-            rgb = ImageEnhance.Brightness(rgb).enhance(min(1.22, 115 / max(mean, 1)))
-        elif mean > 185:
-            rgb = ImageEnhance.Brightness(rgb).enhance(0.94)
-        rgb = ImageEnhance.Contrast(rgb).enhance(1.08)
-        rgb = ImageEnhance.Color(rgb).enhance(1.07)
-        return rgb.filter(ImageFilter.UnsharpMask(radius=1.2, percent=115, threshold=3))
-
-    if action == "adjust":
-        adjusted = image.convert("RGB")
-        adjusted = ImageEnhance.Brightness(adjusted).enhance(max(0.5, min(brightness, 1.5)))
-        adjusted = ImageEnhance.Contrast(adjusted).enhance(max(0.5, min(contrast, 1.5)))
-        adjusted = ImageEnhance.Color(adjusted).enhance(max(0.0, min(saturation, 2.0)))
-        return ImageEnhance.Sharpness(adjusted).enhance(max(0.0, min(sharpness, 2.0)))
 
     if action == "sharpen":
         return image.filter(ImageFilter.UnsharpMask(radius=1.4, percent=135, threshold=3))
@@ -271,10 +245,6 @@ async def edit_image(
     crop_x: Annotated[float, Form()] = 0.5,
     crop_y: Annotated[float, Form()] = 0.5,
     crop_zoom: Annotated[float, Form()] = 1.0,
-    brightness: Annotated[float, Form()] = 1.0,
-    contrast: Annotated[float, Form()] = 1.0,
-    saturation: Annotated[float, Form()] = 1.0,
-    sharpness: Annotated[float, Form()] = 1.0,
     output_format: Annotated[str, Form()] = "WEBP",
     quality: Annotated[int, Form()] = 82,
 ):
@@ -295,10 +265,7 @@ async def edit_image(
     quality = max(35, min(int(quality), 95))
 
     image = load_image(raw)
-    edited = apply_action(
-        image, action, preset, crop_x, crop_y, crop_zoom,
-        brightness, contrast, saturation, sharpness,
-    )
+    edited = apply_action(image, action, preset, crop_x, crop_y, crop_zoom)
 
     # Transparent background requires a format that supports transparency.
     if action == "remove_bg" and output_format == "JPEG":

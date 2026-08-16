@@ -217,15 +217,6 @@ button { color: inherit; }
   background: rgba(85,214,190,.13);
   color: #73e0cc;
 }
-.smart-tool { grid-column:1 / -1; min-height:82px; flex-direction:row; align-items:center; }
-.smart-tool .tool-icon { background:linear-gradient(135deg,rgba(141,124,255,.3),rgba(85,214,190,.25)); font-size:11px; font-weight:800; }
-.tool-card.is-applied { border-color:var(--accent-2); background:rgba(85,214,190,.1); }
-.manual-open { width:100%; }
-.manual-panel { display:grid; gap:13px; margin-top:16px; }
-.manual-panel label { display:grid; grid-template-columns:1fr auto; gap:5px; color:var(--muted); font-size:12px; }
-.manual-panel input { grid-column:1/-1; width:100%; accent-color:var(--accent); }
-.manual-panel > div { display:flex; justify-content:space-between; align-items:center; gap:8px; }
-.manual-panel .primary-button { padding:10px 13px; }
 
 .separator {
   height: 1px;

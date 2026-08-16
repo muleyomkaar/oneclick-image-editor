@@ -31,7 +31,6 @@ let originalUrl = null;
 let originalName = "image";
 let busy = false;
 let cropState = null;
-let activeToggle = null;
 
 const cropPresets = {
   instagram: { width: 1080, height: 1080, label: "Instagram 1:1" },
@@ -86,47 +85,31 @@ function loadFile(file) {
   originalBlob = file;
   currentBlob = file;
   history = [];
-  activeToggle = null;
-  document.querySelectorAll(".tool-card.is-applied").forEach(button => button.classList.remove("is-applied"));
-  originalName = "oneclick-edited";
+  originalName = fileStem(file.name);
   if (originalUrl) URL.revokeObjectURL(originalUrl);
   originalUrl = blobUrl(file);
 
-  fileName.textContent = "Your image";
+  fileName.textContent = file.name;
   setPreview(file, prettyBytes(file.size));
   dropzone.classList.add("hidden");
   editor.classList.remove("hidden");
 }
 
-async function applyEdit(action, preset = null, cropPosition = null, adjustments = null, sourceButton = null) {
+async function applyEdit(action, preset = null, cropPosition = null) {
   if (!currentBlob || busy) return;
-
-  if (sourceButton && activeToggle?.button === sourceButton) {
-    currentBlob = activeToggle.before;
-    if (history.length) history.pop();
-    setPreview(currentBlob, prettyBytes(currentBlob.size));
-    sourceButton.classList.remove("is-applied");
-    sourceButton.setAttribute("aria-pressed", "false");
-    activeToggle = null;
-    showToast("Edit removed.");
-    return;
-  }
 
   const previous = currentBlob;
   setBusy(true);
 
   try {
     const form = new FormData();
-    form.append("file", currentBlob, "image.png");
+    form.append("file", currentBlob, `${originalName}.png`);
     form.append("action", action);
     if (preset) form.append("preset", preset);
     if (cropPosition) {
       form.append("crop_x", cropPosition.x.toFixed(4));
       form.append("crop_y", cropPosition.y.toFixed(4));
       form.append("crop_zoom", cropPosition.zoom.toFixed(2));
-    }
-    if (adjustments) {
-      Object.entries(adjustments).forEach(([key, value]) => form.append(key, value));
     }
     form.append("output_format", formatSelect.value);
 
@@ -161,15 +144,6 @@ async function applyEdit(action, preset = null, cropPosition = null, adjustments
     ].filter(Boolean).join(" · ");
 
     setPreview(result, details);
-    document.querySelectorAll(".tool-card.is-applied").forEach(button => {
-      button.classList.remove("is-applied");
-      button.setAttribute("aria-pressed", "false");
-    });
-    activeToggle = sourceButton ? { button: sourceButton, before: previous } : null;
-    if (sourceButton) {
-      sourceButton.classList.add("is-applied");
-      sourceButton.setAttribute("aria-pressed", "true");
-    }
 
     if (action === "compress") {
       const saved = previous.size > 0
@@ -187,8 +161,6 @@ async function applyEdit(action, preset = null, cropPosition = null, adjustments
 function undo() {
   if (!history.length || busy) return;
   currentBlob = history.pop();
-  activeToggle = null;
-  document.querySelectorAll(".tool-card.is-applied").forEach(button => button.classList.remove("is-applied"));
   setPreview(currentBlob, prettyBytes(currentBlob.size));
 }
 
@@ -196,8 +168,6 @@ function reset() {
   if (!originalBlob || busy) return;
   currentBlob = originalBlob;
   history = [];
-  activeToggle = null;
-  document.querySelectorAll(".tool-card.is-applied").forEach(button => button.classList.remove("is-applied"));
   setPreview(originalBlob, prettyBytes(originalBlob.size));
   showToast("Back to the original.");
 }
@@ -209,7 +179,7 @@ async function downloadCurrent() {
   setBusy(true);
   try {
     const form = new FormData();
-    form.append("file", currentBlob, "image.png");
+    form.append("file", currentBlob, `${originalName}.png`);
     form.append("action", "convert");
     form.append("output_format", formatSelect.value);
     form.append("quality", "88");
@@ -222,7 +192,7 @@ async function downloadCurrent() {
     const url = blobUrl(result);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `oneclick-edited.${ext}`;
+    a.download = `${originalName}-oneclick.${ext}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -252,37 +222,8 @@ fileInput.addEventListener("change", e => loadFile(e.target.files[0]));
 });
 dropzone.addEventListener("drop", e => loadFile(e.dataTransfer.files[0]));
 
-const toolGrid = document.querySelector(".tool-grid");
-const smartButton = document.createElement("button");
-smartButton.className = "tool-card active-ready smart-tool";
-smartButton.dataset.action = "smart_edit";
-smartButton.innerHTML = '<span class="tool-icon">AI</span><span><strong>Smart Best Edit</strong><small>One-touch local photo analysis</small></span>';
-toolGrid.prepend(smartButton);
-
 document.querySelectorAll(".tool-card").forEach(button => {
-  button.setAttribute("aria-pressed", "false");
-  button.addEventListener("click", () => applyEdit(button.dataset.action, null, null, null, button));
-});
-
-const manualPanel = document.createElement("div");
-manualPanel.innerHTML = '<button id="manualBtn" class="manual-open secondary-button">Adjust manually</button><div class="manual-panel hidden" id="manualPanel"><label>Brightness <output id="brightnessValue">100</output><input id="brightnessSlider" type="range" min="50" max="150" value="100"></label><label>Contrast <output id="contrastValue">100</output><input id="contrastSlider" type="range" min="50" max="150" value="100"></label><label>Colour <output id="saturationValue">100</output><input id="saturationSlider" type="range" min="0" max="200" value="100"></label><label>Sharpness <output id="sharpnessValue">100</output><input id="sharpnessSlider" type="range" min="0" max="200" value="100"></label><div><button id="manualResetBtn" class="text-button">Reset sliders</button><button id="manualApplyBtn" class="primary-button">Apply adjustments</button></div></div><div class="separator"></div>';
-const presetLabel = document.querySelector(".preset-row").previousElementSibling;
-presetLabel.before(manualPanel);
-document.getElementById("manualBtn").addEventListener("click", () => document.getElementById("manualPanel").classList.toggle("hidden"));
-const manualSliderIds = ["brightness", "contrast", "saturation", "sharpness"];
-manualSliderIds.forEach(name => {
-  const slider = document.getElementById(`${name}Slider`);
-  slider.addEventListener("input", () => document.getElementById(`${name}Value`).value = slider.value);
-});
-document.getElementById("manualResetBtn").addEventListener("click", () => {
-  manualSliderIds.forEach(name => {
-    document.getElementById(`${name}Slider`).value = "100";
-    document.getElementById(`${name}Value`).value = "100";
-  });
-});
-document.getElementById("manualApplyBtn").addEventListener("click", () => {
-  const values = Object.fromEntries(manualSliderIds.map(name => [name, (Number(document.getElementById(`${name}Slider`).value) / 100).toFixed(2)]));
-  applyEdit("adjust", null, null, values);
+  button.addEventListener("click", () => applyEdit(button.dataset.action));
 });
 function updateCropPreview() {
   if (!cropState || !cropImage.naturalWidth) return;
