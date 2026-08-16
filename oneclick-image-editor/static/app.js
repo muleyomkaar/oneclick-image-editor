@@ -31,6 +31,8 @@ let originalUrl = null;
 let originalName = "image";
 let busy = false;
 let cropState = null;
+let activeEffect = null;
+let superEditConsentGiven = false;
 
 const cropPresets = {
   instagram: { width: 1080, height: 1080, label: "Instagram 1:1" },
@@ -50,7 +52,7 @@ function setBusy(value) {
   busy = value;
   processing.classList.toggle("hidden", !value);
   document.querySelectorAll(".tool-card, .preset").forEach(el => {
-    if (el !== bgTool || !bgTool.dataset.unavailable) el.disabled = value;
+    if (!el.dataset.unavailable) el.disabled = value;
   });
   downloadBtn.disabled = value;
 }
@@ -85,6 +87,7 @@ function loadFile(file) {
   originalBlob = file;
   currentBlob = file;
   history = [];
+  clearActiveEffect();
   originalName = fileStem(file.name);
   if (originalUrl) URL.revokeObjectURL(originalUrl);
   originalUrl = blobUrl(file);
@@ -95,8 +98,25 @@ function loadFile(file) {
   editor.classList.remove("hidden");
 }
 
-async function applyEdit(action, preset = null, cropPosition = null) {
+function clearActiveEffect() {
+  if (activeEffect?.button) {
+    activeEffect.button.classList.remove("is-applied");
+    activeEffect.button.setAttribute("aria-pressed", "false");
+  }
+  activeEffect = null;
+}
+
+async function applyEdit(action, preset = null, cropPosition = null, sourceButton = null) {
   if (!currentBlob || busy) return;
+
+  if (sourceButton && activeEffect?.button === sourceButton) {
+    currentBlob = activeEffect.before;
+    if (history.length) history.pop();
+    clearActiveEffect();
+    setPreview(currentBlob, prettyBytes(currentBlob.size));
+    showToast("Effect removed.");
+    return;
+  }
 
   const previous = currentBlob;
   setBusy(true);
@@ -144,6 +164,12 @@ async function applyEdit(action, preset = null, cropPosition = null) {
     ].filter(Boolean).join(" · ");
 
     setPreview(result, details);
+    clearActiveEffect();
+    if (sourceButton) {
+      sourceButton.classList.add("is-applied");
+      sourceButton.setAttribute("aria-pressed", "true");
+      activeEffect = { button: sourceButton, before: previous };
+    }
 
     if (action === "compress") {
       const saved = previous.size > 0
@@ -161,6 +187,7 @@ async function applyEdit(action, preset = null, cropPosition = null) {
 function undo() {
   if (!history.length || busy) return;
   currentBlob = history.pop();
+  clearActiveEffect();
   setPreview(currentBlob, prettyBytes(currentBlob.size));
 }
 
@@ -168,6 +195,7 @@ function reset() {
   if (!originalBlob || busy) return;
   currentBlob = originalBlob;
   history = [];
+  clearActiveEffect();
   setPreview(originalBlob, prettyBytes(originalBlob.size));
   showToast("Back to the original.");
 }
@@ -222,8 +250,22 @@ fileInput.addEventListener("change", e => loadFile(e.target.files[0]));
 });
 dropzone.addEventListener("drop", e => loadFile(e.dataTransfer.files[0]));
 
+const superTool = document.createElement("button");
+superTool.className = "tool-card active-ready super-tool";
+superTool.dataset.action = "super_edit";
+superTool.innerHTML = '<span class="tool-icon">AI</span><span><strong>SUPER EDIT</strong><small id="superToolNote">Real AI photo analysis</small></span>';
+document.querySelector(".tool-grid").prepend(superTool);
+
 document.querySelectorAll(".tool-card").forEach(button => {
-  button.addEventListener("click", () => applyEdit(button.dataset.action));
+  button.setAttribute("aria-pressed", "false");
+  button.addEventListener("click", () => {
+    if (button === superTool && !superEditConsentGiven) {
+      const approved = window.confirm("SUPER EDIT sends a reduced preview of your image to Groq for AI analysis. Continue?");
+      if (!approved) return;
+      superEditConsentGiven = true;
+    }
+    applyEdit(button.dataset.action, null, null, button);
+  });
 });
 function updateCropPreview() {
   if (!cropState || !cropImage.naturalWidth) return;
@@ -336,6 +378,13 @@ async function loadCapabilities() {
     const caps = await response.json();
     document.getElementById("maxUpload").textContent = caps.maxUploadMB || 12;
 
+    if (!caps.superEdit) {
+      superTool.disabled = true;
+      superTool.dataset.unavailable = "true";
+      document.getElementById("superToolNote").textContent = "Add a Groq API key to enable";
+      superTool.title = "Set GROQ_API_KEY on the server";
+    }
+
     if (caps.backgroundRemoval) {
       bgToolNote.textContent = "AI cutout, transparent PNG";
     } else {
@@ -345,6 +394,9 @@ async function loadCapabilities() {
       bgTool.title = 'Install rembg[cpu] to enable';
     }
   } catch (_) {
+    superTool.disabled = true;
+    superTool.dataset.unavailable = "true";
+    document.getElementById("superToolNote").textContent = "AI service unavailable";
     bgTool.disabled = true;
     bgToolNote.textContent = "Optional AI add-on";
   }

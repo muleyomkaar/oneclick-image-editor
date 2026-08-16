@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import io
+import json
 import os
 from pathlib import Path
 from typing import Annotated
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps, UnidentifiedImageError
+from dotenv import load_dotenv
 
 try:
     from rembg import remove as remove_background
@@ -20,7 +26,13 @@ except ImportError:
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+load_dotenv(BASE_DIR / ".env")
 SITE_URL = os.getenv("SITE_URL", "http://localhost:8000").rstrip("/")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_VISION_MODEL = os.getenv(
+    "GROQ_VISION_MODEL",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+).strip()
 
 MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 MAX_PIXELS = 32_000_000
@@ -66,6 +78,7 @@ def health() -> dict:
 def capabilities() -> dict:
     return {
         "backgroundRemoval": REMBG_AVAILABLE,
+        "superEdit": bool(GROQ_API_KEY),
         "maxUploadMB": MAX_UPLOAD_BYTES // (1024 * 1024),
         "formats": ["PNG", "JPEG", "WEBP"],
     }
@@ -94,6 +107,79 @@ def normalize_for_processing(image: Image.Image) -> Image.Image:
     if "A" in image.getbands():
         return image.convert("RGBA")
     return image.convert("RGB")
+
+
+def create_ai_preview(image: Image.Image) -> str:
+    preview = image.convert("RGB")
+    preview.thumbnail((768, 768), Image.Resampling.LANCZOS)
+    output = io.BytesIO()
+    preview.save(output, format="JPEG", quality=78, optimize=True)
+    return base64.b64encode(output.getvalue()).decode("ascii")
+
+
+def analyze_with_groq(image: Image.Image) -> dict:
+    if not GROQ_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="SUPER EDIT is not configured. Set the GROQ_API_KEY environment variable.",
+        )
+
+    prompt = (
+        "You are a conservative professional photo editor. Analyze this image and return ONLY a JSON object "
+        "with these keys: brightness, contrast, saturation, sharpness (numbers), and autocontrast (boolean). "
+        "Use 1.0 for no change. Keep brightness/contrast between 0.85 and 1.20, saturation between 0.80 and "
+        "1.20, and sharpness between 0.80 and 1.50. Improve the photo naturally without changing its content."
+    )
+    payload = {
+        "model": GROQ_VISION_MODEL,
+        "temperature": 0.1,
+        "max_completion_tokens": 180,
+        "response_format": {"type": "json_object"},
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{create_ai_preview(image)}"}},
+            ],
+        }],
+    }
+    req = urllib_request.Request(
+        "https://api.groq.com/openai/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=35) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        content = body["choices"][0]["message"]["content"].strip()
+        start, end = content.find("{"), content.rfind("}")
+        if start < 0 or end < start:
+            raise ValueError("Groq did not return an adjustment object.")
+        return json.loads(content[start:end + 1])
+    except urllib_error.HTTPError as exc:
+        detail = "Groq rejected the SUPER EDIT request. Check the API key and vision model."
+        raise HTTPException(status_code=502, detail=detail) from exc
+    except (urllib_error.URLError, TimeoutError) as exc:
+        raise HTTPException(status_code=504, detail="Groq did not respond in time. Please try again.") from exc
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=502, detail="Groq returned an invalid edit plan. Please try again.") from exc
+
+
+def apply_super_edit(image: Image.Image, plan: dict) -> Image.Image:
+    def factor(name: str, low: float, high: float) -> float:
+        try:
+            return max(low, min(float(plan.get(name, 1.0)), high))
+        except (TypeError, ValueError):
+            return 1.0
+
+    edited = image.convert("RGB")
+    if plan.get("autocontrast") is True:
+        edited = ImageOps.autocontrast(edited, cutoff=0.5)
+    edited = ImageEnhance.Brightness(edited).enhance(factor("brightness", 0.85, 1.20))
+    edited = ImageEnhance.Contrast(edited).enhance(factor("contrast", 0.85, 1.20))
+    edited = ImageEnhance.Color(edited).enhance(factor("saturation", 0.80, 1.20))
+    return ImageEnhance.Sharpness(edited).enhance(factor("sharpness", 0.80, 1.50))
 
 
 def resize_cover(
@@ -265,7 +351,11 @@ async def edit_image(
     quality = max(35, min(int(quality), 95))
 
     image = load_image(raw)
-    edited = apply_action(image, action, preset, crop_x, crop_y, crop_zoom)
+    if action == "super_edit":
+        plan = await asyncio.to_thread(analyze_with_groq, image)
+        edited = apply_super_edit(image, plan)
+    else:
+        edited = apply_action(image, action, preset, crop_x, crop_y, crop_zoom)
 
     # Transparent background requires a format that supports transparency.
     if action == "remove_bg" and output_format == "JPEG":

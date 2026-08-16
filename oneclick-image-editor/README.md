@@ -79,6 +79,27 @@ python -m pip install -r requirements-ai.txt
 
 Restart the server. The "Remove BG" button will automatically enable.
 
+## Enable AI SUPER EDIT with Groq
+
+SUPER EDIT uses a Groq vision model to analyze a reduced preview and choose safe
+photo adjustments. Pillow applies those adjustments locally to the original-resolution
+image. Add your Groq API key to the included `.env` file and restart the app:
+
+```dotenv
+GROQ_API_KEY=your-groq-api-key
+```
+
+The default vision model is `meta-llama/llama-4-scout-17b-16e-instruct`. You can
+override it without changing code:
+
+```powershell
+$env:GROQ_VISION_MODEL="your-supported-groq-vision-model"
+```
+
+The API key is read only by the FastAPI backend and must never be added to
+`static/app.js` or committed to source control. Using SUPER EDIT sends a reduced
+image preview to Groq for analysis.
+
 ## Architecture
 
 Browser
